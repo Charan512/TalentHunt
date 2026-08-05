@@ -50,7 +50,7 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 # ordered by their specific preference, to maximize resilience.
 AGENT_CONFIGS = {
     0: { # Default
-        "groq": ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"],
+        "groq": ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "llama-3.1-8b-instant"],
         "openrouter": [
             os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free"),
             "nousresearch/hermes-3-llama-3.1-405b:free",
@@ -60,7 +60,7 @@ AGENT_CONFIGS = {
         ]
     },
     1: { # JD Parser (fast & simple extraction)
-        "groq": ["llama-3.1-8b-instant", "llama-3.3-70b-versatile"],
+        "groq": ["llama-3.1-8b-instant", "openai/gpt-oss-20b", "llama-3.3-70b-versatile"],
         "openrouter": [
             "meta-llama/llama-3.2-3b-instruct:free",
             "mistralai/mistral-7b-instruct:free",
@@ -70,7 +70,7 @@ AGENT_CONFIGS = {
         ]
     },
     2: { # Talent Scout (semantic search generation)
-        "groq": ["llama-3.1-8b-instant", "llama-3.3-70b-versatile"],
+        "groq": ["llama-3.1-8b-instant", "qwen/qwen3.6-27b", "llama-3.3-70b-versatile"],
         "openrouter": [
             "meta-llama/llama-3.2-3b-instruct:free",
             "google/gemma-3-27b-it:free",
@@ -80,7 +80,7 @@ AGENT_CONFIGS = {
         ]
     },
     3: { # Recruiter AI (requires high nuance, HR persona)
-        "groq": ["llama-3.3-70b-versatile"],
+        "groq": ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "qwen/qwen3.6-27b"],
         "openrouter": [
             "nousresearch/hermes-3-llama-3.1-405b:free",
             "meta-llama/llama-3.3-70b-instruct:free",
@@ -90,7 +90,7 @@ AGENT_CONFIGS = {
         ]
     },
     4: { # Candidate AI (different persona from recruiter to prevent sameness)
-        "groq": ["llama-3.3-70b-versatile"],
+        "groq": ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "qwen/qwen3.6-27b"],
         "openrouter": [
             "meta-llama/llama-3.3-70b-instruct:free",
             "nousresearch/hermes-3-llama-3.1-405b:free",
@@ -100,7 +100,7 @@ AGENT_CONFIGS = {
         ]
     },
     5: { # Interest Scorer (requires high logical reasoning)
-        "groq": ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"],
+        "groq": ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "qwen/qwen3.6-27b", "llama-3.1-8b-instant"],
         "openrouter": [
             "nousresearch/hermes-3-llama-3.1-405b:free",
             "meta-llama/llama-3.3-70b-instruct:free",
@@ -239,17 +239,17 @@ def parse_json_response(text: str) -> dict:
     """
     Parse a JSON string from an LLM response.
 
-    LLMs frequently wrap JSON in markdown code fences like:
+    LLMs (especially reasoning models like Qwen/DeepSeek) frequently output <think> tags
+    or wrap JSON in markdown code fences like:
         ```json
         { ... }
         ```
-    This function strips those fences before parsing so callers don't
-    need to handle this inconsistency.
-
-    Raises json.JSONDecodeError if the cleaned text is not valid JSON.
+    This function strips reasoning tags and fences before parsing.
     """
+    # Strip <think>...</think> blocks from reasoning models
+    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
     # Remove ```json ... ``` or ``` ... ``` fences
-    cleaned = re.sub(r"```(?:json)?\s*", "", text).strip()
+    cleaned = re.sub(r"```(?:json)?\s*", "", cleaned).strip()
     # Also strip stray backticks or trailing commas before the closing brace
     cleaned = cleaned.rstrip("`").strip()
     return json.loads(cleaned)
@@ -277,7 +277,8 @@ async def _call_openrouter(system_prompt: str, user_prompt: str, model: str) -> 
         messages=messages,
         temperature=0.3,
     )
-    return response.choices[0].message.content.strip()
+    content = response.choices[0].message.content.strip()
+    return re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
 
 
 # ── Private: Groq ─────────────────────────────────────────────────────────────
@@ -294,7 +295,8 @@ async def _call_groq(system_prompt: str, user_prompt: str, model: str) -> str:
         max_tokens=2048,  # Increased to prevent truncation of JSON/explanations
         temperature=0.1,  # Lower temperature for more stable JSON
     )
-    return response.choices[0].message.content.strip()
+    content = response.choices[0].message.content.strip()
+    return re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
 
 
 # ── Private: rate-limit detection ─────────────────────────────────────────────
